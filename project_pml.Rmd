@@ -1,0 +1,139 @@
+---
+title: "Project Practical Machine Learning"
+author: "Ulrike"
+output: html_document
+---
+
+##Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. 
+
+In this project, the goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 healthy participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here:
+[Link to Dataset](http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har) .
+
+Six young healthy participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: 
+
+* exactly according to the specification (Class A), 
+* throwing the elbows to the front (Class B), 
+* lifting the dumbbell only halfway (Class C), 
+* lowering the dumbbell only halfway (Class D) and 
+* throwing the hips to the front (Class E).
+
+The goal of this project is to predict the manner in which they did the exercise. This is the classe variable in the dataset. The data also comes with a validation data set for which the class variable should be predicted in the quiz.
+
+## Load and explore the data set
+
+```{r}
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(caret))
+suppressPackageStartupMessages(library(randomForest))
+
+url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv" 
+destfile <- "pml-training.csv" 
+if (!file.exists(destfile)) { 
+   download.file(url, destfile = destfile, method = "curl") 
+} 
+data <- read.csv("pml-training.csv")
+url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv" 
+destfile <- "pml-testing.csv" 
+if (!file.exists(destfile)) { 
+   download.file(url, destfile = destfile, method = "curl") 
+} 
+validation <- read.csv("pml-testing.csv")
+
+summary(data$classe)
+```
+
+The classes are nicely balanced. A look at the dataset reveals that the first variable is just an index variable, three are time stamps and two are windows which are not explained anywhere.
+I decided to remove these variables as they might not explain the relationship between the accelerometer data and the manner of the exercise but rather how the experiment was set up in time.
+
+```{r}
+data2 <- data[,-c(1,3:7)]
+```
+
+
+Furthermore some rows contain lots of NA's and missing fields.
+I will remove those columns, where more than 90% of the data is missing.
+
+
+```{r}
+data2 <- data2[ lapply( data2, function(x) sum(is.na(x)) / length(x) ) < 0.1 ]
+data2 <- data2[ lapply( data2, function(x) sum((x == '')) / length(x) ) < 0.1 ]
+```
+
+## Partition the data into training and test data
+
+As we have lots of observations for each class I decided to just split the data once into train and test data (60% and 40%) as it will probably give me a useful estimate of the out of sample error without the need for further cross-validation.
+
+```{r}
+trainIndex <- createDataPartition(y = data2$classe, 
+                                  p = 0.6, list = FALSE)
+training <- data2[trainIndex, ]
+testing <- data2[-trainIndex, ]
+```
+
+
+## Set up a prediction model
+
+As this is a classification problem with several observations one might think of several approaches to set up a model, e.g. SVM or naive bayes or random forests. I decided to go for random forests, as I got already used to them during the exercises, but one could think of trying something else when accuracies are not good enough. I choose a large number of trees although this might not be necessary if one wants a quicker solution.
+
+```{r}
+random_forest = randomForest(classe~., data = training, ntree = 500, importance = TRUE)
+random_forest
+```
+
+The variable importance plot below tells for each variable how important that variable is in classifying the data. The plot shows each variable on the y-axis, and their importance on the x-axis. They are ordered top-to-bottom as most- to least-important.
+
+```{r}
+varImpPlot(random_forest, type = 1, pch = 19, col = 1, cex = .5, main = "")
+```
+
+One can see that especially the belt sensor data has been taken into account but also the dumbbell movement seems to be important to classify the movement quality.
+
+
+## Predict test data
+
+I use the random forest model to evaluate how well the model performs on other data and to give an idea of the out of sample error.
+
+```{r}
+test_predictions = predict(random_forest, newdata = testing)
+confusionMatrix(test_predictions, testing$classe)
+```
+
+The accuracy is pretty high. Notice that I just took 40% of the data as test data, so the real value might be a bit different but as we have a large data set it should not differ that much.
+I will therefore use this model to predict the data in the validation set for the quiz.
+
+## Predict validation data set for quiz
+
+```{r}
+validate_predictions = predict(random_forest, newdata = validation)
+```
+
+All of them are correctly classified.
+
+## Things to notice
+
+A few things one should consider when looking at other aspects of this data set. Although the user_name variable does not seem to play so much of a role for classifying it should be looked at more carefully if one wants to predict data from other individuals (not the case here). As only data from 6 individuals has been used and there is sometimes a seemingly high variance between those individuals one should consider this when using the model for other samples.
+
+See for example the pitch_belt variable plotted for each subject with the classes color-coded and how variable these are.
+
+
+```{r}
+ggplot(data, 
+       aes(x = X, y = pitch_belt, color = classe)) +
+   geom_line() + 
+   facet_wrap(~user_name)
+```
+
+It is also important to note that some of the variables used are highly correlated as it can be seen here by listing all variables having a correlation with another variable with a correlation coefficient over 0.8.
+
+```{r}
+# many variables are still highly correlated
+# it might be useful to do some compression
+M <- abs(cor(training[,-c(1,54)]))
+diag(M) <- 0
+which(M > 0.8, arr.ind = T)
+```
+
+It might therefore be good to reduce the variable set before if one wants to investigate the relationship in detail. As I am here only interested in a good classification performance I am okay with a longer estimation time and less interpretability in this case.
+
